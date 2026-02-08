@@ -1,0 +1,20 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mutable-lm"
+version = "0.0.1"
+description = "Mutable language models"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [
+    { name = "Bryan Briney" },
+]
+classifiers = [
+    "Development Status :: 1 - Planning",
+    "Programming Language :: Python :: 3",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mutable"]
