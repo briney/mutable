@@ -1,3 +1,2 @@
-# mutable-lm
+# mutable
 
-Mutable language models.
