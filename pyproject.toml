@@ -26,10 +26,16 @@ dependencies = [
     "evaluate",
     "tqdm",
     "scipy",
+    "hydra-core>=1.3",
+    "omegaconf>=2.3",
+    "click>=8.0",
 ]
 
 [project.optional-dependencies]
 adaptive = ["torchdiffeq"]
+
+[project.scripts]
+mutable = "mutable.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mutable"]

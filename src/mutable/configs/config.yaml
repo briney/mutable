@@ -1,0 +1,12 @@
+defaults:
+  - model: base
+  - flow: default
+  - noise: default
+  - data: denoising
+  - train: denoising
+  - log: default
+  - _self_
+
+name: mutable_experiment
+seed: 42
+output_dir: outputs/${name}

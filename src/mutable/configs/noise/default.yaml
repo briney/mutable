@@ -1,0 +1,6 @@
+mask_ratio: 0.3
+delete_ratio: 0.0
+infill_ratio: 0.0
+poisson_lambda: 3.0
+permute_sentences: false
+random_token_ratio: 0.0
