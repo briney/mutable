@@ -120,4 +120,5 @@ class MutableForDenoising(
             logits=lm_logits,
             latent_states=outputs.latent_states,
             encoder_last_hidden_state=outputs.encoder_last_hidden_state,
+            encoder_attentions=outputs.encoder_attentions,
         )

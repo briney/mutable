@@ -1,0 +1,35 @@
+masking:
+  mask_rate: 0.15
+  seed: 42
+
+metrics:
+  loss:
+    enabled: true
+  masked_accuracy:
+    enabled: true
+  perplexity:
+    enabled: true
+  p_at_l:
+    enabled: true
+    contact_threshold: 8.0
+    min_seq_sep: 6
+    num_layers: null          # auto: 10% of encoder layers
+    head_aggregation: mean
+    contact_mode:             # list of modes to compute
+      - all
+      - cross_chain
+      - intra_heavy
+      - intra_light
+      - cdr_contact
+
+regions:
+  enabled: false
+  mode: standard              # standard | per_position
+  max_samples: null           # subsetting for expensive region eval
+  seed: 42
+  hcdr3: true
+  lcdr3: true
+  all_cdr: true
+  all_fwr: true
+  germline: true
+  nongermline: true

@@ -97,6 +97,140 @@ def _load_config(
         return compose(config_name=config_name, overrides=override_list)
 
 
+def _parse_eval_configs(cfg: DictConfig) -> dict[str, dict]:
+    """Parse eval config into normalized per-dataset dictionaries.
+
+    Supports three formats:
+    1. ``eval: /path/to/data.csv`` → single dataset named "validation"
+    2. ``eval: {validation: /path, test: /path}`` → shorthand paths
+    3. Full per-dataset config with ``path``, ``format``, ``batch_size``, ``metrics``
+
+    Returns empty dict if eval config uses the legacy single-path format
+    (a bare string), which is handled by the existing code path.
+
+    Parameters
+    ----------
+    cfg
+        Full Hydra config.
+
+    Returns
+    -------
+    dict[str, dict]
+        Mapping of eval dataset name to config dict. Each dict has at least
+        ``path`` and ``format`` keys.
+    """
+    eval_cfg = OmegaConf.select(cfg, "data.eval", default=None)
+    if eval_cfg is None:
+        return {}
+
+    # Check if it's a bare string path (legacy format)
+    if isinstance(eval_cfg, str):
+        return {}
+
+    # Convert to container for inspection
+    eval_container = OmegaConf.to_container(eval_cfg, resolve=True)
+
+    if not isinstance(eval_container, dict):
+        return {}
+
+    result = {}
+    for name, value in eval_container.items():
+        if isinstance(value, str):
+            # Shorthand: name: /path/to/data
+            result[name] = {"path": value, "format": _infer_format(value)}
+        elif isinstance(value, dict):
+            entry = dict(value)
+            if "path" not in entry:
+                continue
+            if "format" not in entry:
+                entry["format"] = _infer_format(entry["path"])
+            result[name] = entry
+
+    return result
+
+
+def _infer_format(path: str) -> str:
+    """Infer eval dataset format from file path or directory."""
+    p = Path(path)
+    if p.is_dir():
+        return "structure"
+    suffix = p.suffix.lower()
+    if suffix in {".pdb", ".ent", ".cif", ".mmcif"}:
+        return "structure"
+    return "sequence"
+
+
+def _create_eval_loader(
+    eval_cfg: dict,
+    tokenizer,
+    cfg: DictConfig,
+    seq_collator,
+    struct_collator,
+    mask_col_kwargs: dict,
+):
+    """Create a DataLoader for a single eval dataset config.
+
+    Parameters
+    ----------
+    eval_cfg
+        Per-dataset config dict with at least ``path`` and ``format``.
+    tokenizer
+        Mutable tokenizer.
+    cfg
+        Full Hydra config.
+    seq_collator
+        Collator for sequence datasets.
+    struct_collator
+        Collator for structure datasets.
+    mask_col_kwargs
+        Annotation column keyword arguments.
+
+    Returns
+    -------
+    DataLoader or None
+    """
+    import datasets as hf_datasets
+    from torch.utils.data import DataLoader
+
+    from .eval.datasets import AntibodyStructureDataset, EvalDenoisingDataset
+
+    path = eval_cfg["path"]
+    fmt = eval_cfg.get("format", "sequence")
+    batch_size = eval_cfg.get("batch_size", OmegaConf.select(cfg, "train.per_device_eval_batch_size", default=8))
+
+    if fmt == "structure":
+        dataset = AntibodyStructureDataset(
+            structure_dir=path,
+            tokenizer=tokenizer,
+            max_length=OmegaConf.select(cfg, "data.max_length", default=512),
+            heavy_chain_id=eval_cfg.get("heavy_chain_id", "H"),
+            light_chain_id=eval_cfg.get("light_chain_id", "L"),
+        )
+        return DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            collate_fn=struct_collator,
+        )
+    else:
+        # Sequence dataset
+        ds = hf_datasets.load_dataset("csv", data_files=path, split="train")
+        dataset = EvalDenoisingDataset(
+            dataset=ds,
+            tokenizer=tokenizer,
+            max_length=OmegaConf.select(cfg, "data.max_length", default=512),
+            heavy_col=OmegaConf.select(cfg, "data.heavy_col", default="heavy"),
+            light_col=OmegaConf.select(cfg, "data.light_col", default="light"),
+            **mask_col_kwargs,
+        )
+        return DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            collate_fn=seq_collator,
+        )
+
+
 def run_denoising_training(
     config: str | None = None,
     output_dir: str = "outputs",
@@ -225,8 +359,44 @@ def run_denoising_training(
         **mask_col_kwargs,
     )
 
-    eval_dataset = None
-    if cfg.data.eval is not None:
+    # --- Eval datasets ---
+    eval_dataset = None  # HF Trainer fallback eval dataset
+    eval_loaders: dict = {}
+    evaluator = None
+
+    eval_configs = _parse_eval_configs(cfg)
+    if eval_configs:
+        from torch.utils.data import DataLoader
+
+        from .eval.datasets import AntibodyStructureDataset, EvalDenoisingDataset, StructureCollator
+        from .eval.evaluator import Evaluator
+
+        eval_collator = DenoisingCollator(
+            pad_token_id=model_config.pad_token_id,
+            use_weighted_masking=True,  # eval datasets always use clean tokens + masks
+        )
+        struct_collator = StructureCollator(pad_token_id=model_config.pad_token_id)
+
+        for eval_name, eval_cfg in eval_configs.items():
+            loader = _create_eval_loader(
+                eval_cfg=eval_cfg,
+                tokenizer=tokenizer,
+                cfg=cfg,
+                seq_collator=eval_collator,
+                struct_collator=struct_collator,
+                mask_col_kwargs=mask_col_kwargs,
+            )
+            if loader is not None:
+                eval_loaders[eval_name] = loader
+
+        if eval_loaders:
+            evaluator = Evaluator(
+                cfg=cfg,
+                model=model,
+                tokenizer=tokenizer,
+            )
+    elif cfg.data.eval is not None:
+        # Legacy single-path eval: use DenoisingDataset with noise for HF Trainer default eval
         eval_ds = hf_datasets.load_dataset(
             "csv", data_files=cfg.data.eval, split="train"
         )
@@ -267,6 +437,8 @@ def run_denoising_training(
         masker=masker,
         uniform_masker=uniform_masker,
         use_weighted_masking=use_weighted_masking,
+        evaluator=evaluator,
+        eval_loaders=eval_loaders,
         model=model,
         args=training_args,
         train_dataset=train_dataset,

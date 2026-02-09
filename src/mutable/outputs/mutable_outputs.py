@@ -129,12 +129,15 @@ class DenoisingOutput(MutableModelOutput):
         Bottleneck latents, shape (batch_size, num_latents, latent_dim).
     encoder_last_hidden_state : Optional[torch.FloatTensor]
         Encoder output.
+    encoder_attentions : Optional[Tuple[torch.FloatTensor, ...]]
+        Per-layer encoder attention weights (only when ``output_attentions=True``).
     """
 
     loss: Optional[torch.FloatTensor] = None
     logits: torch.FloatTensor = None
     latent_states: Optional[torch.FloatTensor] = None
     encoder_last_hidden_state: Optional[torch.FloatTensor] = None
+    encoder_attentions: Optional[Tuple[torch.FloatTensor, ...]] = None
 
 
 @dataclass

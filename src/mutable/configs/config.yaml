@@ -5,6 +5,7 @@ defaults:
   - masking: default
   - data: denoising
   - train: denoising
+  - eval: denoising
   - log: default
   - _self_
 

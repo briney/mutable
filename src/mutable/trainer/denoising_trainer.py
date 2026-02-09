@@ -4,11 +4,16 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from transformers import Trainer
 
 from ..masking import InformationWeightedMasker, UniformMasker
+
+if TYPE_CHECKING:
+    from torch.utils.data import DataLoader
+
+    from ..eval.evaluator import Evaluator
 
 __all__ = ["DenoisingTrainer"]
 
@@ -30,6 +35,9 @@ class DenoisingTrainer(Trainer):
     ``InformationWeightedMasker`` when annotation masks are present in the
     batch, otherwise falls back to ``UniformMasker``.
 
+    When ``evaluator`` is provided, overrides the default ``evaluate()``
+    method to use the custom multi-dataset evaluation harness.
+
     Parameters
     ----------
     masker : InformationWeightedMasker, optional
@@ -38,6 +46,10 @@ class DenoisingTrainer(Trainer):
         Fallback masker for batches without annotation masks.
     use_weighted_masking : bool, default=False
         Whether batch-level masking is enabled.
+    evaluator : Evaluator, optional
+        Custom evaluator for multi-dataset, multi-metric evaluation.
+    eval_loaders : dict[str, DataLoader], optional
+        Named eval DataLoaders for the evaluator.
     **kwargs
         All other arguments are forwarded to ``transformers.Trainer``.
     """
@@ -47,12 +59,16 @@ class DenoisingTrainer(Trainer):
         masker: Optional[InformationWeightedMasker] = None,
         uniform_masker: Optional[UniformMasker] = None,
         use_weighted_masking: bool = False,
+        evaluator: Optional[Evaluator] = None,
+        eval_loaders: Optional[dict[str, DataLoader]] = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
         self.masker = masker
         self.uniform_masker = uniform_masker
         self.use_weighted_masking = use_weighted_masking
+        self.evaluator = evaluator
+        self.eval_loaders = eval_loaders or {}
 
     def _apply_masking(self, inputs: dict) -> dict:
         """Apply batch-level masking and strip annotation keys.
@@ -98,3 +114,33 @@ class DenoisingTrainer(Trainer):
         if self.use_weighted_masking:
             inputs = self._apply_masking(inputs)
         return super().compute_loss(model, inputs, return_outputs=return_outputs, **kwargs)
+
+    def evaluate(
+        self,
+        eval_dataset=None,
+        ignore_keys=None,
+        metric_key_prefix="eval",
+    ):
+        """Evaluate using the custom evaluator if available, else fall back to default.
+
+        When ``self.evaluator`` is set, runs multi-dataset evaluation and
+        flattens results into ``eval/{dataset_name}/{metric}`` format for
+        logging.
+        """
+        if self.evaluator is None or not self.eval_loaders:
+            return super().evaluate(
+                eval_dataset=eval_dataset,
+                ignore_keys=ignore_keys,
+                metric_key_prefix=metric_key_prefix,
+            )
+
+        all_results = self.evaluator.evaluate_all(self.eval_loaders)
+
+        # Flatten into {eval/{name}/{metric}: value}
+        flat: dict[str, float] = {}
+        for eval_name, metrics in all_results.items():
+            for k, v in metrics.items():
+                flat[f"eval/{eval_name}/{k}"] = v
+
+        self.log(flat)
+        return flat
