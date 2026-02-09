@@ -168,6 +168,70 @@ def mock_denoising_output(sample_batch):
 
 
 @pytest.fixture(scope="session")
+def small_flow_config():
+    """Tiny FlowMatchingConfig for fast tests."""
+    from mutable.config import FlowMatchingConfig
+
+    return FlowMatchingConfig(
+        hidden_size=64,
+        num_layers=2,
+        num_attention_heads=4,
+        intermediate_size=128,
+        time_embedding_dim=32,
+        mu_embedding_dim=32,
+        dropout=0.0,
+    )
+
+
+@pytest.fixture(scope="session")
+def small_flow_model(small_config, small_flow_config):
+    """Tiny MutableFlowMatching in eval mode."""
+    from mutable.models.flow_matching import MutableFlowMatching
+
+    torch.manual_seed(42)
+    model = MutableFlowMatching(small_config, small_flow_config)
+    model.eval()
+    return model
+
+
+@pytest.fixture(scope="session")
+def noise_fn():
+    """BartNoiseFunction instance."""
+    from mutable.modules.noise import BartNoiseFunction
+
+    return BartNoiseFunction(
+        mask_token_id=31,
+        pad_token_id=1,
+        vocab_size=32,
+        mask_ratio=0.3,
+    )
+
+
+@pytest.fixture
+def mock_hf_dataset():
+    """Simple mock HF dataset with heavy/light columns."""
+
+    class MockDataset:
+        def __init__(self, data, columns=None):
+            self.data = data
+            self.column_names = columns or list(data[0].keys())
+
+        def __getitem__(self, idx):
+            return self.data[idx]
+
+        def __len__(self):
+            return len(self.data)
+
+    data = [
+        {"heavy": "EVQLVESGGGLVQPGG", "light": "DIQMTQSPSSLSA"},
+        {"heavy": "QVQLVQSGAEVKKPGA", "light": "EIVLTQSPGTLSL"},
+        {"heavy": "EVQLLESGGGLVQPGG", "light": "DIVMTQSPLSLPVT"},
+        {"heavy": "QVQLQQSGAELARPGA", "light": "DIQMTQSPSSLSA"},
+    ]
+    return MockDataset(data)
+
+
+@pytest.fixture(scope="session")
 def eval_cfg():
     """OmegaConf config from configs/eval/denoising.yaml merged with model config."""
     eval_yaml = OmegaConf.create({
