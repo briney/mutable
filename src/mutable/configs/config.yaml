@@ -2,6 +2,7 @@ defaults:
   - model: base
   - flow: default
   - noise: default
+  - masking: default
   - data: denoising
   - train: denoising
   - log: default

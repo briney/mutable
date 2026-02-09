@@ -125,6 +125,7 @@ def run_denoising_training(
     import datasets as hf_datasets
 
     from .datasets import DenoisingCollator, DenoisingDataset
+    from .masking import InformationWeightedMasker, UniformMasker
     from .models import MutableForDenoising
     from .modules.noise import BartNoiseFunction
     from .tokenizer import MutableTokenizer
@@ -152,19 +153,56 @@ def run_denoising_training(
     # create tokenizer
     tokenizer = MutableTokenizer()
 
-    # create noise function
-    noise_fn = BartNoiseFunction(
-        mask_token_id=model_config.mask_token_id,
-        pad_token_id=model_config.pad_token_id,
-        vocab_size=model_config.vocab_size,
-        mask_ratio=cfg.noise.mask_ratio,
-        delete_ratio=cfg.noise.delete_ratio,
-        infill_ratio=cfg.noise.infill_ratio,
-        poisson_lambda=cfg.noise.poisson_lambda,
-        permute_sentences=cfg.noise.permute_sentences,
-        random_token_ratio=cfg.noise.random_token_ratio,
-        sep_token_id=model_config.sep_token_id,
-    )
+    # masking setup
+    use_weighted_masking = cfg.masking.use_weighted_masking
+
+    # create noise function (only needed in default mode)
+    noise_fn = None
+    if not use_weighted_masking:
+        noise_fn = BartNoiseFunction(
+            mask_token_id=model_config.mask_token_id,
+            pad_token_id=model_config.pad_token_id,
+            vocab_size=model_config.vocab_size,
+            mask_ratio=cfg.noise.mask_ratio,
+            delete_ratio=cfg.noise.delete_ratio,
+            infill_ratio=cfg.noise.infill_ratio,
+            poisson_lambda=cfg.noise.poisson_lambda,
+            permute_sentences=cfg.noise.permute_sentences,
+            random_token_ratio=cfg.noise.random_token_ratio,
+            sep_token_id=model_config.sep_token_id,
+        )
+
+    # create maskers (only needed in weighted mode)
+    masker = None
+    uniform_masker = None
+    if use_weighted_masking:
+        masker = InformationWeightedMasker(
+            mask_rate=cfg.masking.mask_rate,
+            mask_token_id=model_config.mask_token_id,
+            cdr_weight_multiplier=cfg.masking.cdr_weight_multiplier,
+            nongermline_weight_multiplier=cfg.masking.nongermline_weight_multiplier,
+            v_weight_multiplier=cfg.masking.v_weight_multiplier,
+            d_weight_multiplier=cfg.masking.d_weight_multiplier,
+            j_weight_multiplier=cfg.masking.j_weight_multiplier,
+            n_weight_multiplier=cfg.masking.n_weight_multiplier,
+            selection_method=cfg.masking.selection_method,
+        )
+        uniform_masker = UniformMasker(
+            mask_rate=cfg.masking.mask_rate,
+            mask_token_id=model_config.mask_token_id,
+        )
+
+    # mask column names from data config
+    mask_col_kwargs = {}
+    if use_weighted_masking:
+        mask_col_kwargs = dict(
+            heavy_cdr_col=cfg.data.heavy_cdr_col,
+            light_cdr_col=cfg.data.light_cdr_col,
+            heavy_nongermline_col=cfg.data.heavy_nongermline_col,
+            light_nongermline_col=cfg.data.light_nongermline_col,
+            heavy_segment_col=cfg.data.heavy_segment_col,
+            light_segment_col=cfg.data.light_segment_col,
+        )
 
     # load datasets
     if cfg.data.train is None:
@@ -183,6 +221,8 @@ def run_denoising_training(
         max_length=cfg.data.max_length,
         heavy_col=cfg.data.heavy_col,
         light_col=cfg.data.light_col,
+        use_weighted_masking=use_weighted_masking,
+        **mask_col_kwargs,
     )
 
     eval_dataset = None
@@ -197,10 +237,15 @@ def run_denoising_training(
             max_length=cfg.data.max_length,
             heavy_col=cfg.data.heavy_col,
             light_col=cfg.data.light_col,
+            use_weighted_masking=use_weighted_masking,
+            **mask_col_kwargs,
         )
 
     # collator
-    collator = DenoisingCollator(pad_token_id=model_config.pad_token_id)
+    collator = DenoisingCollator(
+        pad_token_id=model_config.pad_token_id,
+        use_weighted_masking=use_weighted_masking,
+    )
 
     # training args
     training_args = training_args_from_dictconfig(cfg.train, cfg.output_dir)
@@ -219,6 +264,9 @@ def run_denoising_training(
 
     # create trainer
     trainer = DenoisingTrainer(
+        masker=masker,
+        uniform_masker=uniform_masker,
+        use_weighted_masking=use_weighted_masking,
         model=model,
         args=training_args,
         train_dataset=train_dataset,

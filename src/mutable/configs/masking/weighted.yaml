@@ -1,0 +1,9 @@
+use_weighted_masking: true
+mask_rate: 0.3
+cdr_weight_multiplier: 2.0
+nongermline_weight_multiplier: 2.0
+v_weight_multiplier: 0.0
+d_weight_multiplier: 0.0
+j_weight_multiplier: 0.0
+n_weight_multiplier: 0.0
+selection_method: sampled

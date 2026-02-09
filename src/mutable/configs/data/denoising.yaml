@@ -3,3 +3,11 @@ eval: null
 max_length: 512
 heavy_col: heavy
 light_col: light
+
+# mask annotation columns (null = not present in data)
+heavy_cdr_col: null
+light_cdr_col: null
+heavy_nongermline_col: null
+light_nongermline_col: null
+heavy_segment_col: null
+light_segment_col: null
