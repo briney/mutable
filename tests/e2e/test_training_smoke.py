@@ -19,6 +19,7 @@ from torch.utils.data import DataLoader
 from transformers import TrainingArguments
 
 from mutable.config import MutableConfig
+from mutable.datasets import FlowMatchingCollator
 from mutable.eval.evaluator import Evaluator
 from mutable.models.mutable_denoising import MutableForDenoising
 from mutable.tokenizer import MutableTokenizer
@@ -278,9 +279,7 @@ class TestTrainingSmoke:
             def __getitem__(self, idx):
                 return self.items[idx]
 
-        def collate(batch):
-            return {k: torch.stack([b[k] for b in batch]) for k in batch[0]}
-
+        collator = FlowMatchingCollator(pad_token_id=1)
         train_ds = SimpleDataset(_make_items(8))
 
         training_args = TrainingArguments(
@@ -296,7 +295,7 @@ class TestTrainingSmoke:
             model=model,
             args=training_args,
             train_dataset=train_ds,
-            data_collator=collate,
+            data_collator=collator,
         )
 
         trainer.train()

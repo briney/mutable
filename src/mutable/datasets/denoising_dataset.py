@@ -4,12 +4,15 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Dict, List, Optional
 
 import torch
 from torch.utils.data import Dataset
 
 from ..modules.noise import BartNoiseFunction
+
+logger = logging.getLogger(__name__)
 
 __all__ = ["DenoisingDataset", "DenoisingCollator"]
 
@@ -103,14 +106,35 @@ class DenoisingDataset(Dataset):
                 "noise_fn is required when use_weighted_masking=False"
             )
 
-        # Determine which mask columns are available in the dataset
+        # Validate required columns
         ds_columns = set(dataset.column_names)
-        self.heavy_cdr_col = heavy_cdr_col if heavy_cdr_col and heavy_cdr_col in ds_columns else None
-        self.light_cdr_col = light_cdr_col if light_cdr_col and light_cdr_col in ds_columns else None
-        self.heavy_nongermline_col = heavy_nongermline_col if heavy_nongermline_col and heavy_nongermline_col in ds_columns else None
-        self.light_nongermline_col = light_nongermline_col if light_nongermline_col and light_nongermline_col in ds_columns else None
-        self.heavy_segment_col = heavy_segment_col if heavy_segment_col and heavy_segment_col in ds_columns else None
-        self.light_segment_col = light_segment_col if light_segment_col and light_segment_col in ds_columns else None
+        if heavy_col not in ds_columns:
+            raise ValueError(
+                f"Required column '{heavy_col}' not found. "
+                f"Available: {sorted(ds_columns)}"
+            )
+        if light_col not in ds_columns:
+            raise ValueError(
+                f"Required column '{light_col}' not found. "
+                f"Available: {sorted(ds_columns)}"
+            )
+
+        # Determine which annotation columns are available, warn if specified but missing
+        for col_value, attr_name in [
+            (heavy_cdr_col, "heavy_cdr_col"),
+            (light_cdr_col, "light_cdr_col"),
+            (heavy_nongermline_col, "heavy_nongermline_col"),
+            (light_nongermline_col, "light_nongermline_col"),
+            (heavy_segment_col, "heavy_segment_col"),
+            (light_segment_col, "light_segment_col"),
+        ]:
+            resolved = col_value if col_value and col_value in ds_columns else None
+            setattr(self, attr_name, resolved)
+            if col_value and resolved is None:
+                logger.warning(
+                    "Annotation column '%s' not found in dataset; ignoring.",
+                    col_value,
+                )
 
         self.has_cdr = self.heavy_cdr_col is not None or self.light_cdr_col is not None
         self.has_nongermline = self.heavy_nongermline_col is not None or self.light_nongermline_col is not None

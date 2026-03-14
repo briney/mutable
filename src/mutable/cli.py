@@ -130,12 +130,198 @@ def train_flow(
 
 
 @main.command()
-def generate() -> None:
-    """Generate mutated antibody sequences (not yet implemented)."""
-    raise NotImplementedError(
-        "Generation is not yet implemented. "
-        "Use MutableFlowMatching.generate() directly for now."
+@click.option(
+    "--checkpoint",
+    "-p",
+    type=click.Path(exists=True),
+    required=True,
+    help="Trained flow matching checkpoint directory.",
+)
+@click.option(
+    "--input",
+    "-i",
+    "input_file",
+    type=click.Path(exists=True),
+    default=None,
+    help="CSV file with germline sequences.",
+)
+@click.option(
+    "--sequences",
+    "-s",
+    multiple=True,
+    help="Direct heavy:light sequence pairs (can be repeated).",
+)
+@click.option(
+    "--output",
+    "-o",
+    type=click.Path(),
+    default=None,
+    help="Output CSV path (default: stdout).",
+)
+@click.option("--mu", type=float, default=1.0, help="Mutation intensity.")
+@click.option(
+    "--solver",
+    type=click.Choice(["euler", "rk4", "adaptive"]),
+    default=None,
+    help="ODE solver (default: from config).",
+)
+@click.option("--steps", type=int, default=None, help="ODE integration steps (default: from config).")
+@click.option("--batch-size", type=int, default=32, help="Generation batch size.")
+@click.option("--device", type=str, default=None, help="Device: cpu/cuda (default: auto).")
+@click.option(
+    "--germline-heavy-col",
+    type=str,
+    default="germline_heavy",
+    help="CSV column name for germline heavy chain.",
+)
+@click.option(
+    "--germline-light-col",
+    type=str,
+    default="germline_light",
+    help="CSV column name for germline light chain.",
+)
+def generate(
+    checkpoint: str,
+    input_file: str | None,
+    sequences: tuple[str, ...],
+    output: str | None,
+    mu: float,
+    solver: str | None,
+    steps: int | None,
+    batch_size: int,
+    device: str | None,
+    germline_heavy_col: str,
+    germline_light_col: str,
+) -> None:
+    """Generate mutated antibody sequences using a trained flow matching model.
+
+    Provide input via --input (CSV) or --sequences (heavy:light pairs).
+
+    Examples:
+
+        mutable generate -p outputs/flow/final -i germlines.csv
+
+        mutable generate -p checkpoint/ -s "EVQLVESGG:DIQMTQSPS" --mu 0.5
+
+        mutable generate -p checkpoint/ -i germlines.csv -o mutated.csv --solver rk4 --steps 200
+    """
+    import csv
+    import sys
+
+    import torch
+
+    from .config import FlowMatchingConfig, MutableConfig
+    from .models import MutableFlowMatching
+    from .tokenizer import MutableTokenizer
+
+    checkpoint_path = Path(checkpoint)
+
+    if not input_file and not sequences:
+        raise click.UsageError("Provide input via --input or --sequences.")
+
+    # --- Load model ---
+    model_config = MutableConfig.from_pretrained(checkpoint_path)
+
+    # Load flow config — try checkpoint dir, fall back to defaults
+    flow_config_path = checkpoint_path / "config.json"
+    # FlowMatchingConfig may be saved alongside or we use defaults
+    try:
+        flow_config = FlowMatchingConfig.from_pretrained(checkpoint_path)
+    except Exception:
+        flow_config = FlowMatchingConfig()
+
+    model = MutableFlowMatching.from_pretrained(
+        checkpoint_path, flow_config=flow_config
     )
+    tokenizer = MutableTokenizer.from_pretrained(checkpoint_path)
+
+    # Device
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = model.to(device)
+    model.eval()
+
+    # --- Collect input sequences ---
+    pairs: list[tuple[str, str]] = []
+
+    if input_file:
+        with open(input_file, newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                heavy = row[germline_heavy_col]
+                light = row[germline_light_col]
+                pairs.append((heavy, light))
+
+    for seq_str in sequences:
+        if ":" not in seq_str:
+            raise click.UsageError(
+                f"Sequence must be 'heavy:light' format, got: {seq_str}"
+            )
+        heavy, light = seq_str.split(":", 1)
+        pairs.append((heavy, light))
+
+    if not pairs:
+        raise click.UsageError("No input sequences found.")
+
+    # --- Generate in batches ---
+    sep_token = "<sep>"
+    results: list[tuple[str, str]] = []
+
+    for batch_start in range(0, len(pairs), batch_size):
+        batch_pairs = pairs[batch_start : batch_start + batch_size]
+
+        # Tokenize
+        seqs = [f"{h}{sep_token}{l}" for h, l in batch_pairs]
+        encoding = tokenizer(
+            seqs,
+            truncation=True,
+            max_length=model_config.max_position_embeddings
+            if hasattr(model_config, "max_position_embeddings")
+            else 512,
+            padding=True,
+            return_tensors="pt",
+        )
+        input_ids = encoding["input_ids"].to(device)
+        attention_mask = encoding["attention_mask"].to(device)
+        mu_tensor = torch.full(
+            (len(batch_pairs),), mu, dtype=torch.float32, device=device
+        )
+
+        # Generate
+        output_ids = model.generate(
+            germline_input_ids=input_ids,
+            germline_attention_mask=attention_mask,
+            mu=mu_tensor,
+            num_steps=steps,
+            solver=solver,
+        )
+
+        # Decode and split on <sep>
+        for ids in output_ids:
+            decoded = tokenizer.decode(ids, skip_special_tokens=False)
+            # Strip BOS/EOS and split on <sep>
+            decoded = decoded.replace("<cls>", "").replace("<eos>", "").replace("<pad>", "").strip()
+            if sep_token in decoded:
+                heavy_out, light_out = decoded.split(sep_token, 1)
+            else:
+                heavy_out = decoded
+                light_out = ""
+            results.append((heavy_out.strip(), light_out.strip()))
+
+    # --- Write output ---
+    if output:
+        out_f = open(output, "w", newline="")
+    else:
+        out_f = sys.stdout
+
+    try:
+        writer = csv.writer(out_f)
+        writer.writerow(["mutated_heavy", "mutated_light"])
+        for heavy_out, light_out in results:
+            writer.writerow([heavy_out, light_out])
+    finally:
+        if output:
+            out_f.close()
 
 
 @main.command("model-size")

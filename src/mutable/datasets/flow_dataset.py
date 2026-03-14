@@ -2,12 +2,17 @@
 # Distributed under the terms of the MIT License.
 # SPDX-License-Identifier: MIT
 
+from __future__ import annotations
+
+import logging
 from typing import Dict, Optional
 
 import torch
 from torch.utils.data import Dataset
 
-__all__ = ["FlowMatchingDataset"]
+__all__ = ["FlowMatchingDataset", "FlowMatchingCollator"]
+
+logger = logging.getLogger(__name__)
 
 
 class FlowMatchingDataset(Dataset):
@@ -55,6 +60,31 @@ class FlowMatchingDataset(Dataset):
         self.germline_light_col = germline_light_col
         self.mutated_heavy_col = mutated_heavy_col
         self.mutated_light_col = mutated_light_col
+
+        # Validate required columns
+        ds_columns = set(dataset.column_names)
+        required = {
+            germline_heavy_col: "germline_heavy_col",
+            germline_light_col: "germline_light_col",
+            mutated_heavy_col: "mutated_heavy_col",
+            mutated_light_col: "mutated_light_col",
+        }
+        missing = [
+            name for col, name in required.items() if col not in ds_columns
+        ]
+        if missing:
+            raise ValueError(
+                f"Required column(s) not found: {missing}. "
+                f"Available: {sorted(ds_columns)}"
+            )
+
+        # Validate optional mu column
+        if mu_col and mu_col not in ds_columns:
+            logger.warning(
+                "mu column '%s' not found in dataset; will compute from sequences.",
+                mu_col,
+            )
+            mu_col = None
         self.mu_col = mu_col
 
     def __len__(self):
@@ -82,19 +112,17 @@ class FlowMatchingDataset(Dataset):
         germline_seq = f"{germline_heavy}<sep>{germline_light}"
         mutated_seq = f"{mutated_heavy}<sep>{mutated_light}"
 
-        # tokenize
+        # tokenize (no padding — collator handles dynamic batching)
         germline_enc = self.tokenizer(
             germline_seq,
             truncation=True,
             max_length=self.max_length,
-            padding="max_length",
             return_tensors="pt",
         )
         mutated_enc = self.tokenizer(
             mutated_seq,
             truncation=True,
             max_length=self.max_length,
-            padding="max_length",
             return_tensors="pt",
         )
 
@@ -113,4 +141,79 @@ class FlowMatchingDataset(Dataset):
             "mutated_input_ids": mutated_enc["input_ids"].squeeze(0),
             "mutated_attention_mask": mutated_enc["attention_mask"].squeeze(0),
             "mu": torch.tensor(mu, dtype=torch.float32),
+        }
+
+
+class FlowMatchingCollator:
+    """Data collator for flow matching training.
+
+    Dynamically pads germline and mutated sequences to the maximum length
+    in each batch, and stacks scalar ``mu`` values.
+
+    Parameters
+    ----------
+    pad_token_id : int
+        Token ID used for padding.
+    """
+
+    def __init__(self, pad_token_id: int):
+        self.pad_token_id = pad_token_id
+
+    def __call__(
+        self, features: list[dict[str, torch.Tensor]]
+    ) -> dict[str, torch.Tensor]:
+        max_germline_len = max(
+            f["germline_input_ids"].shape[0] for f in features
+        )
+        max_mutated_len = max(
+            f["mutated_input_ids"].shape[0] for f in features
+        )
+
+        germline_ids = []
+        germline_mask = []
+        mutated_ids = []
+        mutated_mask = []
+        mus = []
+
+        for f in features:
+            # pad germline
+            g_len = f["germline_input_ids"].shape[0]
+            g_pad = max_germline_len - g_len
+            germline_ids.append(
+                torch.cat([
+                    f["germline_input_ids"],
+                    torch.full((g_pad,), self.pad_token_id, dtype=torch.long),
+                ])
+            )
+            germline_mask.append(
+                torch.cat([
+                    f["germline_attention_mask"],
+                    torch.zeros(g_pad, dtype=torch.long),
+                ])
+            )
+
+            # pad mutated
+            m_len = f["mutated_input_ids"].shape[0]
+            m_pad = max_mutated_len - m_len
+            mutated_ids.append(
+                torch.cat([
+                    f["mutated_input_ids"],
+                    torch.full((m_pad,), self.pad_token_id, dtype=torch.long),
+                ])
+            )
+            mutated_mask.append(
+                torch.cat([
+                    f["mutated_attention_mask"],
+                    torch.zeros(m_pad, dtype=torch.long),
+                ])
+            )
+
+            mus.append(f["mu"])
+
+        return {
+            "germline_input_ids": torch.stack(germline_ids),
+            "germline_attention_mask": torch.stack(germline_mask),
+            "mutated_input_ids": torch.stack(mutated_ids),
+            "mutated_attention_mask": torch.stack(mutated_mask),
+            "mu": torch.stack(mus),
         }

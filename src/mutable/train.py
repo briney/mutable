@@ -485,7 +485,7 @@ def run_flow_training(
     import torch
     import datasets as hf_datasets
 
-    from .datasets import FlowMatchingDataset
+    from .datasets import FlowMatchingCollator, FlowMatchingDataset
     from .models import MutableFlowMatching
     from .tokenizer import MutableTokenizer
     from .trainer import FlowMatchingTrainer
@@ -505,6 +505,7 @@ def run_flow_training(
     model_config = mutable_config_from_dictconfig(cfg.model)
     flow_config = flow_config_from_dictconfig(cfg.flow, model_config)
     model_config.save_pretrained(output_path)
+    flow_config.save_pretrained(output_path)
 
     # resolve pretrained checkpoint (CLI arg > config value)
     checkpoint_path = pretrained or cfg.train.get("pretrained_checkpoint")
@@ -593,17 +594,23 @@ def run_flow_training(
     else:
         training_args.report_to = ["none"]
 
+    # collator
+    collator = FlowMatchingCollator(pad_token_id=model_config.pad_token_id)
+
     # create trainer
     trainer = FlowMatchingTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
+        data_collator=collator,
     )
 
     # train
     trainer.train()
 
     # save final model
-    trainer.save_model(str(output_path / "final"))
-    tokenizer.save_pretrained(str(output_path / "final"))
+    final_path = output_path / "final"
+    trainer.save_model(str(final_path))
+    tokenizer.save_pretrained(str(final_path))
+    flow_config.save_pretrained(str(final_path))

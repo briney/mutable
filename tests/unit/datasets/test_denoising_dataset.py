@@ -4,6 +4,8 @@
 
 """Tests for DenoisingDataset and DenoisingCollator."""
 
+import logging
+
 import pytest
 import torch
 
@@ -137,6 +139,48 @@ class TestDenoisingDataset:
     def test_len_returns_dataset_length(self, simple_dataset, tokenizer, noise_fn):
         ds = DenoisingDataset(simple_dataset, tokenizer, noise_fn=noise_fn)
         assert len(ds) == 4
+
+    def test_missing_required_column_raises(self, tokenizer, noise_fn):
+        """ValueError when a required sequence column is missing."""
+        class MockDS:
+            column_names = ["heavy"]  # missing 'light'
+            def __getitem__(self, idx):
+                return {"heavy": "EVQLVESGG"}
+            def __len__(self):
+                return 1
+
+        with pytest.raises(ValueError, match="Required column 'light'"):
+            DenoisingDataset(MockDS(), tokenizer, noise_fn=noise_fn)
+
+    def test_missing_heavy_col_raises(self, tokenizer, noise_fn):
+        """ValueError when heavy column is missing."""
+        class MockDS:
+            column_names = ["light"]
+            def __getitem__(self, idx):
+                return {"light": "DIQMTQSPS"}
+            def __len__(self):
+                return 1
+
+        with pytest.raises(ValueError, match="Required column 'heavy'"):
+            DenoisingDataset(MockDS(), tokenizer, noise_fn=noise_fn)
+
+    def test_misspelled_annotation_col_warns(self, tokenizer, caplog):
+        """Warning when an annotation column is specified but not in dataset."""
+        class MockDS:
+            column_names = ["heavy", "light"]
+            def __getitem__(self, idx):
+                return {"heavy": "EVQLVESGG", "light": "DIQMTQSPS"}
+            def __len__(self):
+                return 1
+
+        with caplog.at_level(logging.WARNING):
+            ds = DenoisingDataset(
+                MockDS(), tokenizer,
+                use_weighted_masking=True,
+                heavy_cdr_col="misspelled_cdr",
+            )
+        assert "misspelled_cdr" in caplog.text
+        assert ds.heavy_cdr_col is None
 
 
 class TestDenoisingCollator:
