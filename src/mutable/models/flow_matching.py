@@ -150,7 +150,7 @@ class MutableFlowMatching(
             logit_normal_std=flow_config.logit_normal_std,
         )
 
-        self.init_weights()
+        self.post_init()
 
     def forward(
         self,

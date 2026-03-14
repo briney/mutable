@@ -18,22 +18,21 @@ class MutablePreTrainedModel(PreTrainedModel):
 
     supports_gradient_checkpointing = True
 
-    # Copied from transformers.models.bert.modeling_bert.BertPreTrainedModel._init_weights
     def _init_weights(self, module):
-        """Initialize the weights."""
+        """Initialize the weights using nn.init functions (v5-compatible)."""
         if isinstance(module, nn.Linear):
-            module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
+            nn.init.normal_(module.weight, mean=0.0, std=self.config.initializer_range)
             if module.bias is not None:
-                module.bias.data.zero_()
+                nn.init.zeros_(module.bias)
         elif isinstance(module, nn.Embedding):
-            module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
+            nn.init.normal_(module.weight, mean=0.0, std=self.config.initializer_range)
             if module.padding_idx is not None:
                 module.weight.data[module.padding_idx].zero_()
         elif isinstance(module, nn.LayerNorm):
             if module.bias is not None:
-                module.bias.data.zero_()
+                nn.init.zeros_(module.bias)
             if module.weight is not None:
-                module.weight.data.fill_(1.0)
+                nn.init.ones_(module.weight)
 
 
 class FreezeBaseModelMixin:

@@ -41,7 +41,7 @@ class MutableForDenoising(
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
         self.criterion = nn.CrossEntropyLoss(ignore_index=-100)
 
-        self.init_weights()
+        self.post_init()
 
     def _shift_right(self, input_ids: torch.LongTensor) -> torch.LongTensor:
         """

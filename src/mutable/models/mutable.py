@@ -5,10 +5,11 @@
 from typing import Optional, Union
 
 import torch
+import torch.nn as nn
 
 from ..config import MutableConfig
 from ..outputs import MutableModelFullOutput, EncoderOutput, BottleneckOutput
-from .base import MutablePreTrainedModel, ParameterCountMixin
+from .base import ParameterCountMixin
 from .encoder import MutableEncoder
 from .bottleneck import PerceiverBottleneck
 from .decoder import MutableDecoder
@@ -16,7 +17,7 @@ from .decoder import MutableDecoder
 __all__ = ["MutableModel"]
 
 
-class MutableModel(MutablePreTrainedModel, ParameterCountMixin):
+class MutableModel(nn.Module, ParameterCountMixin):
     """
     Full Mutable model: encoder -> Perceiver bottleneck -> decoder.
 
@@ -26,18 +27,13 @@ class MutableModel(MutablePreTrainedModel, ParameterCountMixin):
         Model configuration.
     """
 
-    config_class = MutableConfig
-    base_model_prefix = "mutable"
-
     def __init__(self, config: MutableConfig):
-        super().__init__(config)
+        super().__init__()
         self.config = config
 
         self.encoder = MutableEncoder(config)
         self.bottleneck = PerceiverBottleneck(config)
         self.decoder = MutableDecoder(config)
-
-        self.post_init()
 
     def encode(
         self,
